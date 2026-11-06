@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Skill Library",
+    "description": "One place for local skills and experts: lists skills installed in DSH / WorkBuddy / Claude / Codex / Doubao, imports, removes and previews them, and can search SKILL.md on GitHub to install with one click. Reads plain files only and never modifies source folders."
+  }
+}
