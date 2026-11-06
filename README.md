@@ -83,7 +83,7 @@ plugin_manager install_bundle  <克隆目录的绝对路径>
 |---|---|---|
 | GitHub Token | 发现页顶部提示条，或 `~/.dsh/skillbox-github.json` 的 `{"token":"..."}` | 可选。没有也能用（匿名限流：代码搜索 10 次/分，仓库搜索 30 次/分） |
 | Token 环境变量 | `GH_TOKEN` / `GITHUB_TOKEN` | 优先级低于上面的文件 |
-| 导出包目录 | 环境变量 `DSH_SKILLBOX_IMPORTS`（多个用 `;` 分隔） | 默认还读 `~/.dsh/imports` |
+| 导出包目录 | 环境变量 `DSH_SKILLBOX_IMPORTS`（`;` 分隔）、`~/.dsh/skillbox-imports.json` 的 `{"dirs":["D:/some/dir"]}`、或默认 `~/.dsh/imports` | 三个来源合并去重，用来扫描豆包「工作伙伴」导出包 |
 | 数据文件 | `~/.dsh/skillbox-{selection,i18n,github,autoselect}.json` | 会话专家选择、翻译缓存、Token、自检旗标 |
 | 日志 | `~/.dsh/skillbox-inject.log` | 每次注入专家人设记一行，便于排查 |
 
