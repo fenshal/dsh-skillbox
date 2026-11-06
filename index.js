@@ -341,13 +341,21 @@ function scanExperts() {
 
 /* ---------- 豆包工作伙伴导出包（manifest.json + agents/<id>/agent.yml） ---------- */
 
-/* 导出包目录：可用环境变量 DSH_SKILLBOX_IMPORTS（多个用 ; 分隔）覆盖，默认 ~/.dsh/imports */
+/* 导出包目录：环境变量 DSH_SKILLBOX_IMPORTS（; 分隔）+ ~/.dsh/skillbox-imports.json 的 {"dirs":[...]} + 默认 ~/.dsh/imports */
 const EXPORT_DIRS = (() => {
-  const extra = (process.env.DSH_SKILLBOX_IMPORTS || '')
+  const dirs = [];
+  const env = (process.env.DSH_SKILLBOX_IMPORTS || '')
     .split(';')
     .map((s) => s.trim())
     .filter(Boolean);
-  const dirs = [...extra, join(HOME, '.dsh', 'imports')];
+  dirs.push(...env);
+  try {
+    const cfg = JSON.parse(readFileSync(join(HOME, '.dsh', 'skillbox-imports.json'), 'utf8').replace(/^\uFEFF/, ''));
+    if (cfg && Array.isArray(cfg.dirs)) for (const d of cfg.dirs) if (typeof d === 'string' && d.trim()) dirs.push(d.trim());
+  } catch (error) {
+    /* 没有配置文件就用默认 */
+  }
+  dirs.push(join(HOME, '.dsh', 'imports'));
   return Array.from(new Set(dirs));
 })();
 
