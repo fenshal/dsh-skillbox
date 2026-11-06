@@ -1,0 +1,54 @@
+{
+  "name": "@local/dsh-skillbox",
+  "version": "0.2.0",
+  "private": false,
+  "description": "DSH Skill Library: a local skill and expert manager for DeepSeek Harness — lists skills from DSH / WorkBuddy / Claude / Codex / Doubao, imports and previews them, and discovers SKILL.md on GitHub",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.png"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.png",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "skills",
+    "skill-management",
+    "agents",
+    "github"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/fenshal/dsh-skillbox#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fenshal/dsh-skillbox.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fenshal/dsh-skillbox/issues"
+  }
+}
