@@ -179,6 +179,7 @@ window.__ModuleLoader__.load({
       '.sh-excerpt{margin:0;padding:10px 11px;border-radius:8px;border:1px solid var(--sh-line);background:var(--sh-fg);font-family:ui-monospace,Consolas,monospace;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:280px;overflow:auto;opacity:.78}',
       '.sh-empty{padding:28px 8px;text-align:center;font-size:12.5px;opacity:.5}',
       '.sh-err{color:#ff9c9c;opacity:1}',
+      '.sh-more{grid-column:1/-1;display:flex;justify-content:center;padding:10px 0 4px}',
       '.sh-foot{display:flex;gap:10px;align-items:center;padding:8px 20px;border-top:1px solid var(--sh-line);font-size:11px;opacity:.45}',
       '.sh-foot-r{margin-left:auto}',
       '.sh-sort{height:30px;padding:0 8px;border-radius:8px;border:1px solid var(--sh-line);background:transparent;color:inherit;font-size:12.5px;cursor:pointer}',
@@ -467,6 +468,12 @@ window.__ModuleLoader__.load({
       const [ghBusy, setGhBusy] = React.useState(false);
       const [dSort, setDSort] = React.useState('default');
       const [dMeta, setDMeta] = React.useState({});
+      const [dSrc, setDSrc] = React.useState('github');
+      const [clawItems, setClawItems] = React.useState([]);
+      const [clawLoading, setClawLoading] = React.useState(false);
+      const [clawErr, setClawErr] = React.useState('');
+      const [clawCursor, setClawCursor] = React.useState('');
+      const [clawSort, setClawSort] = React.useState('downloads');
       const D_CATS = [
         { id: 'claude', label: 'Claude', q: 'topic:claude-skills' },
         { id: 'codex', label: 'Codex', q: 'topic:codex' },
@@ -733,6 +740,71 @@ window.__ModuleLoader__.load({
         if (!prev) return;
         setInstalling(prev.path);
         api('/skillbox/discover/install', { repo: prev.repo, path: prev.path, branch: prev.branch || '' })
+          .then(function (res) {
+            if (!res || !res.ok) throw new Error((res && res.error) || '安装失败');
+            say('已安装 ' + res.files + ' 个文件到 ' + res.target);
+            setPrev(null);
+            return load();
+          })
+          .catch(function (err) {
+            say('安装失败：' + String((err && err.message) || err));
+          })
+          .finally(function () {
+            setInstalling('');
+          });
+      }
+
+      function loadClaw(nextSort, text, more) {
+        const sort = nextSort || clawSort;
+        const q = String(text == null ? '' : text).trim();
+        const cursor = more ? clawCursor : '';
+        setClawLoading(true);
+        setClawErr('');
+        const url = q
+          ? '/skillbox/clawhub/search?q=' + encodeURIComponent(q) + '&limit=30'
+          : '/skillbox/clawhub/list?sort=' + encodeURIComponent(sort) + '&limit=30' +
+            (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+        api(url)
+          .then(function (res) {
+            if (!res || !res.ok) throw new Error((res && res.error) || 'ClawHub 请求失败');
+            const items = res.items || [];
+            setClawItems(function (old) {
+              if (!more) return items;
+              const seen = {};
+              (old || []).forEach(function (x) { seen[x.key] = 1; });
+              return (old || []).concat(items.filter(function (x) { return !seen[x.key]; }));
+            });
+            setClawCursor(res.nextCursor || '');
+          })
+          .catch(function (err) {
+            if (!more) setClawItems([]);
+            setClawErr(String((err && err.message) || err));
+          })
+          .finally(function () {
+            setClawLoading(false);
+          });
+      }
+
+      function openClawPrev(item) {
+        const base = { src: 'clawhub', owner: item.owner, slug: item.slug, name: item.name || item.slug, path: 'SKILL.md', item: item, tag: 'clawhub:' + item.owner + '/' + item.slug };
+        setPrev(Object.assign({ loading: true, text: '' }, base));
+        api(
+          '/skillbox/clawhub/file?owner=' + encodeURIComponent(item.owner) +
+            '&slug=' + encodeURIComponent(item.slug) + '&path=SKILL.md',
+        )
+          .then(function (res) {
+            if (!res || !res.ok) throw new Error((res && res.error) || '读取失败');
+            setPrev(Object.assign({ loading: false, text: res.text || '' }, base));
+          })
+          .catch(function (err) {
+            setPrev(Object.assign({ loading: false, text: '读取失败：' + String((err && err.message) || err) }, base));
+          });
+      }
+
+      function installClaw(item) {
+        const tag = 'clawhub:' + item.owner + '/' + item.slug;
+        setInstalling(tag);
+        api('/skillbox/clawhub/install', { owner: item.owner, slug: item.slug })
           .then(function (res) {
             if (!res || !res.ok) throw new Error((res && res.error) || '安装失败');
             say('已安装 ' + res.files + ' 个文件到 ' + res.target);
@@ -1151,52 +1223,46 @@ window.__ModuleLoader__.load({
         return !!(gh && gh.hasToken);
       }
 
-      const discoverList = h(
+      const srcChips = h(
         'div',
-        { className: 'sh-list' },
-        gh && !gh.hasToken
-          ? h(
-              'div',
-              { className: 'sh-note' },
-              h('span', null, '匿名模式：每小时 60 次请求，搜索 10 次/分钟。填个自己的 Token 就宽裕了。'),
-              h(
-                'button',
-                {
-                  className: 'sh-btn',
-                  onClick: function () {
-                    setGhOpen(!ghOpen);
-                  },
-                },
-                ghOpen ? '收起' : '填写 Token',
-              ),
-              ghOpen
-                ? h(
-                    'div',
-                    { className: 'sh-note-row' },
-                    h('input', {
-                      className: 'sh-input',
-                      placeholder: 'ghp_… / github_pat_…（只存在本机）',
-                      value: ghInput,
-                      onChange: function (ev) {
-                        setGhInput(ev.target.value);
-                      },
-                    }),
-                    h(
-                      'button',
-                      {
-                        className: 'sh-btn on',
-                        disabled: ghBusy,
-                        onClick: saveGhToken,
-                      },
-                      ghBusy ? '保存中…' : '保存',
-                    ),
-                  )
-                : null,
-            )
-          : null,
+        { className: 'sh-modes' },
         h(
           'div',
+          {
+            className: 'sh-chip' + (dSrc === 'github' ? ' on' : ''),
+            onClick: function () {
+              if (dSrc === 'github') return;
+              setDSrc('github');
+            },
+          },
+          'GitHub 搜索',
+        ),
+        h(
+          'div',
+          {
+            className: 'sh-chip' + (dSrc === 'clawhub' ? ' on' : ''),
+            title: 'ClawHub 是注册式技能目录，带真实下载 / 安装 / 星标统计',
+            onClick: function () {
+              if (dSrc === 'clawhub') return;
+              setDSrc('clawhub');
+              if (!clawItems.length && !clawLoading) loadClaw(clawSort, '');
+            },
+          },
+          'ClawHub 热门',
+        ),
+      );
+
+      const CLAW_SORTS = [
+        ['downloads', '按下载量'],
+        ['installs', '按安装量'],
+        ['stars', '按星标'],
+        ['updated', '按最近更新'],
+      ];
+
+      const ghChips = h(
+          'div',
           { className: 'sh-chips' },
+          srcChips,
           h(
             'div',
             { className: 'sh-modes' },
@@ -1269,84 +1335,222 @@ window.__ModuleLoader__.load({
               c.label,
             );
           }),
+        );
+
+      const clawChips = h(
+        'div',
+        { className: 'sh-chips' },
+        srcChips,
+        h(
+          'span',
+          { className: 'sh-sort-hint' },
+          'ClawHub 目录按真实统计排序（约 30 条一页，可加载更多）',
         ),
-        dLoading ? h('div', { className: 'sh-empty' }, '搜索中…') : null,
-        !dLoading && dErr ? h('div', { className: 'sh-empty sh-err' }, dErr) : null,
-        !dLoading && !dErr && !dItems.length
-          ? h('div', { className: 'sh-empty' }, '没有结果，换个关键词或分类试试')
-          : null,
-        dMode === 'skills'
-          ? dSorted.map(function (item) {
-              return h(
-                'div',
-                { key: item.key, className: 'sh-row', title: item.repo + '/' + item.path },
-                h(
-                  'div',
-                  { className: 'sh-row-h' },
-                  h(
-                    'div',
-                    { className: 'sh-row-t' },
-                    h('span', { className: 'sh-row-name' }, item.name),
-                    h(
-                      'div',
-                      { className: 'sh-row-b' },
-                      h('span', { className: 'sh-badge' }, item.repo),
-                      item.stars
-                        ? h('span', { className: 'sh-badge' }, '★ ' + item.stars)
-                        : dMeta[item.repo]
-                          ? h('span', { className: 'sh-badge' }, '★ ' + dMeta[item.repo].stars)
-                          : null,
-                      item.language ? h('span', { className: 'sh-badge' }, item.language) : null,
-                    ),
-                  ),
-                  h(
-                    'button',
-                    {
-                      className: 'sh-act',
-                      onClick: function (ev) {
-                        ev.stopPropagation();
-                        openPreview({ path: item.path, name: item.name, size: 0 }, item.repo, '');
-                      },
-                    },
-                    '预览 / 安装',
-                  ),
-                ),
-                h('div', { className: 'sh-row-d' }, zhOf(item.description) || item.path),
-                h('div', { className: 'sh-row-m' }, item.path),
-              );
-            })
-          : dSorted.map(function (item) {
+        CLAW_SORTS.map(function (s) {
           return h(
             'div',
             {
-              key: item.repo,
-              className: 'sh-row' + (repoSel && repoSel.repo === item.repo ? ' on' : ''),
+              key: s[0],
+              className: 'sh-chip' + (clawSort === s[0] ? ' on' : ''),
               onClick: function () {
-                openRepo(item);
+                setClawSort(s[0]);
+                loadClaw(s[0], '');
               },
             },
-            h(
-              'div',
-              { className: 'sh-row-h' },
-              h(
-                'div',
-                { className: 'sh-row-t' },
-                h('span', { className: 'sh-row-name', title: item.repo }, item.repo),
-                h(
-                  'div',
-                  { className: 'sh-row-b' },
-                  h('span', { className: 'sh-badge' }, '★ ' + item.stars),
-                  item.language ? h('span', { className: 'sh-badge' }, item.language) : null,
-                  h('span', { className: 'sh-badge' }, String(item.updated || '').slice(0, 10)),
-                ),
-              ),
-            ),
-            h('div', { className: 'sh-row-d' }, zhOf(item.description) || '（无描述）'),
-            h('div', { className: 'sh-row-m', title: item.url }, item.url),
+            s[1],
           );
         }),
       );
 
+      const clawRows = clawItems.map(function (item) {
+        const tag = 'clawhub:' + item.owner + '/' + item.slug;
+        return h(
+          'div',
+          { key: item.key, className: 'sh-row', title: item.owner + '/' + item.slug },
+          h(
+            'div',
+            { className: 'sh-row-h' },
+            h(
+              'div',
+              { className: 'sh-row-t' },
+              h('span', { className: 'sh-row-name' }, item.name),
+              h(
+                'div',
+                { className: 'sh-row-b' },
+                h('span', { className: 'sh-badge' }, item.owner + '/' + item.slug),
+                item.downloads ? h('span', { className: 'sh-badge' }, '↓ ' + item.downloads.toLocaleString()) : null,
+                item.installs ? h('span', { className: 'sh-badge' }, '⤓ ' + item.installs.toLocaleString()) : null,
+                item.stars ? h('span', { className: 'sh-badge' }, '★ ' + item.stars.toLocaleString()) : null,
+              ),
+            ),
+            h(
+              'button',
+              {
+                className: 'sh-act',
+                disabled: installing === tag,
+                onClick: function (ev) {
+                  ev.stopPropagation();
+                  openClawPrev(item);
+                },
+              },
+              installing === tag ? '安装中…' : '预览 / 安装',
+            ),
+          ),
+          h('div', { className: 'sh-row-d' }, zhOf(item.description) || '（无描述）'),
+          h('div', { className: 'sh-row-m' }, item.url + (item.version ? '  · v' + item.version : '')),
+        );
+      });
+
+      const discoverList = h(
+        'div',
+        { className: 'sh-list' },
+        dSrc === 'github' && gh && !gh.hasToken ?
+          h(
+                        'div',
+                        { className: 'sh-note' },
+                        h('span', null, '匿名模式：每小时 60 次请求，搜索 10 次/分钟。填个自己的 Token 就宽裕了。'),
+                        h(
+                          'button',
+                          {
+                            className: 'sh-btn',
+                            onClick: function () {
+                              setGhOpen(!ghOpen);
+                            },
+                          },
+                          ghOpen ? '收起' : '填写 Token',
+                        ),
+                        ghOpen
+                          ? h(
+                              'div',
+                              { className: 'sh-note-row' },
+                              h('input', {
+                                className: 'sh-input',
+                                placeholder: 'ghp_… / github_pat_…（只存在本机）',
+                                value: ghInput,
+                                onChange: function (ev) {
+                                  setGhInput(ev.target.value);
+                                },
+                              }),
+                              h(
+                                'button',
+                                {
+                                  className: 'sh-btn on',
+                                  disabled: ghBusy,
+                                  onClick: saveGhToken,
+                                },
+                                ghBusy ? '保存中…' : '保存',
+                              ),
+                            )
+                          : null,
+                      )
+                    : null,
+        dSrc === 'github' ? ghChips : clawChips,
+        dSrc === 'clawhub'
+          ? [
+              clawLoading && !clawItems.length
+                ? h('div', { className: 'sh-empty' }, '读取 ClawHub…')
+                : null,
+              !clawLoading && clawErr ? h('div', { className: 'sh-empty sh-err' }, clawErr) : null,
+              !clawLoading && !clawErr && !clawItems.length
+                ? h('div', { className: 'sh-empty' }, '没有结果，换个关键词或分类试试')
+                : null,
+              clawRows,
+              clawItems.length && clawCursor && !String(query || '').trim()
+                ? h(
+                    'div',
+                    { className: 'sh-more' },
+                    h(
+                      'button',
+                      {
+                        className: 'sh-btn',
+                        disabled: clawLoading,
+                        onClick: function () {
+                          loadClaw(clawSort, '', true);
+                        },
+                      },
+                      clawLoading ? '加载中…' : '加载更多',
+                    ),
+                  )
+                : null,
+            ]
+          : [
+                dLoading ? h('div', { className: 'sh-empty' }, '搜索中…') : null,
+                !dLoading && dErr ? h('div', { className: 'sh-empty sh-err' }, dErr) : null,
+                !dLoading && !dErr && !dItems.length
+                  ? h('div', { className: 'sh-empty' }, '没有结果，换个关键词或分类试试')
+                  : null,
+                dMode === 'skills'
+                  ? dSorted.map(function (item) {
+                      return h(
+                        'div',
+                        { key: item.key, className: 'sh-row', title: item.repo + '/' + item.path },
+                        h(
+                          'div',
+                          { className: 'sh-row-h' },
+                          h(
+                            'div',
+                            { className: 'sh-row-t' },
+                            h('span', { className: 'sh-row-name' }, item.name),
+                            h(
+                              'div',
+                              { className: 'sh-row-b' },
+                              h('span', { className: 'sh-badge' }, item.repo),
+                              item.stars
+                                ? h('span', { className: 'sh-badge' }, '★ ' + item.stars)
+                                : dMeta[item.repo]
+                                  ? h('span', { className: 'sh-badge' }, '★ ' + dMeta[item.repo].stars)
+                                  : null,
+                              item.language ? h('span', { className: 'sh-badge' }, item.language) : null,
+                            ),
+                          ),
+                          h(
+                            'button',
+                            {
+                              className: 'sh-act',
+                              onClick: function (ev) {
+                                ev.stopPropagation();
+                                openPreview({ path: item.path, name: item.name, size: 0 }, item.repo, '');
+                              },
+                            },
+                            '预览 / 安装',
+                          ),
+                        ),
+                        h('div', { className: 'sh-row-d' }, zhOf(item.description) || item.path),
+                        h('div', { className: 'sh-row-m' }, item.path),
+                      );
+                    })
+                  : dSorted.map(function (item) {
+                  return h(
+                    'div',
+                    {
+                      key: item.repo,
+                      className: 'sh-row' + (repoSel && repoSel.repo === item.repo ? ' on' : ''),
+                      onClick: function () {
+                        openRepo(item);
+                      },
+                    },
+                    h(
+                      'div',
+                      { className: 'sh-row-h' },
+                      h(
+                        'div',
+                        { className: 'sh-row-t' },
+                        h('span', { className: 'sh-row-name', title: item.repo }, item.repo),
+                        h(
+                          'div',
+                          { className: 'sh-row-b' },
+                          h('span', { className: 'sh-badge' }, '★ ' + item.stars),
+                          item.language ? h('span', { className: 'sh-badge' }, item.language) : null,
+                          h('span', { className: 'sh-badge' }, String(item.updated || '').slice(0, 10)),
+                        ),
+                      ),
+                    ),
+                    h('div', { className: 'sh-row-d' }, zhOf(item.description) || '（无描述）'),
+                    h('div', { className: 'sh-row-m', title: item.url }, item.url),
+                  );
+                }),
+            ],
+      );
       const discoverSide = h(
         'div',
         { className: 'sh-side' },
@@ -1449,14 +1653,20 @@ window.__ModuleLoader__.load({
           ),
           h('input', {
             className: 'sh-search',
-            placeholder: view === 'discover' ? '搜索 GitHub 仓库，回车搜索…' : '搜索名称、描述、路径…',
+            placeholder:
+              view !== 'discover'
+                ? '搜索名称、描述、路径…'
+                : dSrc === 'clawhub'
+                  ? '搜索 ClawHub 技能（如 github、pdf），回车搜索…'
+                  : '搜索 GitHub 仓库，回车搜索…',
             value: query,
             onChange: function (e) {
               setQuery(e.target.value);
             },
             onKeyDown: function (e) {
-              if (e.key === 'Enter') {
-                if (view === 'discover') runSearch(query);
+              if (e.key === 'Enter' && view === 'discover') {
+                if (dSrc === 'clawhub') loadClaw(clawSort, query);
+                else runSearch(query);
               }
             },
           }),
@@ -1516,7 +1726,13 @@ window.__ModuleLoader__.load({
                       'div',
                       { className: 'sh-prev-tt' },
                       h('div', { className: 'sh-prev-name' }, prev.name || 'SKILL.md'),
-                      h('div', { className: 'sh-prev-repo' }, prev.repo + ' · ' + (prev.branch || 'main')),
+                      h(
+                        'div',
+                        { className: 'sh-prev-repo' },
+                        prev.src === 'clawhub'
+                          ? 'ClawHub · ' + prev.owner + '/' + prev.slug
+                          : prev.repo + ' · ' + (prev.branch || 'main'),
+                      ),
                     ),
                     h('button', { className: 'sh-x', onClick: function () { setPrev(null); } }, '×'),
                   ),
@@ -1525,7 +1741,15 @@ window.__ModuleLoader__.load({
                     { className: 'sh-prev-meta' },
                     h('span', { className: 'sh-badge' }, prev.path),
                     prev.size ? h('span', { className: 'sh-badge' }, Math.max(1, Math.round(prev.size / 1024)) + ' KB') : null,
-                    h('span', { className: 'sh-badge' }, installing === prev.path ? '安装中…' : '来自 GitHub'),
+                    h(
+                      'span',
+                      { className: 'sh-badge' },
+                      installing === (prev.tag || prev.path)
+                        ? '安装中…'
+                        : prev.src === 'clawhub'
+                          ? '来自 ClawHub'
+                          : '来自 GitHub',
+                    ),
                   ),
                   h(
                     'div',
@@ -1542,17 +1766,26 @@ window.__ModuleLoader__.load({
                   h(
                     'div',
                     { className: 'sh-prev-f' },
-                    h('span', { className: 'sh-prev-tip' }, '安装会把该技能整个目录下载到 ~/.dsh/skills，不改动原仓库'),
+                    h(
+                      'span',
+                      { className: 'sh-prev-tip' },
+                      prev.src === 'clawhub'
+                        ? '安装会把该技能整个包下载到 ~/.dsh/skills，不改动 ClawHub 上的原技能'
+                        : '安装会把该技能整个目录下载到 ~/.dsh/skills，不改动原仓库',
+                    ),
                     h('span', { className: 'sh-prev-w' }),
                     h(
                       'a',
                       {
                         className: 'sh-btn',
-                        href: 'https://github.com/' + prev.repo + '/blob/' + (prev.branch || 'main') + '/' + prev.path,
+                        href:
+                          prev.src === 'clawhub'
+                            ? 'https://clawhub.ai/' + prev.owner + '/' + prev.slug
+                            : 'https://github.com/' + prev.repo + '/blob/' + (prev.branch || 'main') + '/' + prev.path,
                         target: '_blank',
                         rel: 'noreferrer',
                       },
-                      '在 GitHub 打开',
+                      prev.src === 'clawhub' ? '在 ClawHub 打开' : '在 GitHub 打开',
                     ),
                     prev.isReadme
                       ? h('span', { className: 'sh-badge' }, 'README 不能安装')
@@ -1560,10 +1793,15 @@ window.__ModuleLoader__.load({
                           'button',
                           {
                             className: 'sh-btn primary',
-                            disabled: prev.loading || installing === prev.path,
-                            onClick: installFromGitHub,
+                            disabled: prev.loading || Boolean(installing),
+                            onClick:
+                              prev.src === 'clawhub'
+                                ? function () {
+                                    installClaw(prev.item);
+                                  }
+                                : installFromGitHub,
                           },
-                          installing === prev.path ? '安装中…' : '安装到技能库',
+                          installing ? '安装中…' : '安装到技能库',
                         ),
                   ),
                 ),
