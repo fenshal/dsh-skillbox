@@ -1167,6 +1167,12 @@ function cmpVer(a, b) {
 }
 
 async function latestRelease() {
+  // 检查更新不能吃缓存，否则刚发的版本要等 5 分钟才看得到。
+  try {
+    ghCache.delete('/repos/' + UPDATE_REPO + '/releases/latest');
+  } catch (error) {
+    /* ignore */
+  }
   const found = await ghJson('/repos/' + UPDATE_REPO + '/releases/latest');
   if (!found || found.status !== 200 || !found.json) {
     return { ok: false, error: found && found.error ? found.error : 'release lookup failed (status ' + (found && found.status) + ')' };
