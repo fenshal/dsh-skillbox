@@ -1,5 +1,24 @@
 # 更新记录
 
+## 0.3.0 — 2026-11-10
+
+### 新增
+
+- **ClawHub 目录源**：发现页新增「ClawHub 热门」，直接读 [clawhub.ai](https://clawhub.ai) 公共 API——按真实下载量 / 安装量 / 星标 / 最近更新排序，支持关键词搜索与「加载更多」翻页
+- **ClawHub 一键安装**：预览 SKILL.md 后把整包（zip）解到 `~/.dsh/skills/<slug>`，保留 `assets/` `hooks/` `references/` `scripts/` 等子目录
+- 发现页顶部来源切换：`GitHub 搜索` ⇄ `ClawHub 热门`
+
+### 改进
+
+- 卡片按来源显示对应统计：GitHub 显示 ★ / Fork，ClawHub 显示 ↓ 下载 / ⤓ 安装 / ★ 星标
+- 预览弹窗按来源切换页脚：链接与安装按钮分别走 GitHub raw 或 ClawHub 下载接口
+- 搜索框占位文案随来源变化
+
+### 说明
+
+- ClawHub 接口公开、无需 Token；GitHub 仍走三级 Token 回退
+- ClawHub 的 zip 由内置最小解析器解压（支持 store / deflate），不引入第三方依赖
+
 ## 0.2.0 — 2026-11-07
 
 首个公开版本。
