@@ -3,6 +3,7 @@ import { join, relative, resolve, sep, dirname, delimiter } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { inflateRawSync } from 'node:zlib';
 
 const HOME = homedir();
 const DSH_SKILLS = join(HOME, '.dsh', 'skills');
@@ -970,6 +971,105 @@ async function ghListDir(repo, dir, branch, depth, out) {
   }
 }
 
+// ===== ClawHub 目录（clawhub.ai，公开 API，无需 token）=====
+// 与 GitHub 代码搜索的区别：ClawHub 是注册式目录，带真实下载/安装/星标统计。
+const CLAWHUB_BASE = 'https://clawhub.ai/api/v1';
+
+async function clawhubJson(path) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(function () { ctrl.abort(); }, 20000);
+  try {
+    const res = await fetch(CLAWHUB_BASE + path, {
+      headers: { accept: 'application/json', 'user-agent': 'dsh-skillbox' },
+      signal: ctrl.signal,
+    });
+    if (!res.ok) return { status: res.status, json: null };
+    return { status: res.status, json: await res.json() };
+  } catch (error) {
+    return { status: 0, json: null };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function clawhubBuffer(path, limit) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(function () { ctrl.abort(); }, 45000);
+  try {
+    const res = await fetch(CLAWHUB_BASE + path, {
+      headers: { accept: '*/*', 'user-agent': 'dsh-skillbox' },
+      signal: ctrl.signal,
+    });
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (limit && buf.length > limit) return null;
+    return buf;
+  } catch (error) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 最小 zip 读取器：只支持 store(0) 与 deflate(8)，够 ClawHub 的包用（≤8MB）。
+function unzipBuffer(buf) {
+  let eocd = -1;
+  const lower = Math.max(0, buf.length - 66000);
+  for (let i = buf.length - 22; i >= lower; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) return [];
+  const count = buf.readUInt16LE(eocd + 10);
+  let off = buf.readUInt32LE(eocd + 16);
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    if (off + 46 > buf.length) break;
+    if (buf.readUInt32LE(off) !== 0x02014b50) break;
+    const method = buf.readUInt16LE(off + 10);
+    const compSize = buf.readUInt32LE(off + 20);
+    const nameLen = buf.readUInt16LE(off + 28);
+    const extraLen = buf.readUInt16LE(off + 30);
+    const commentLen = buf.readUInt16LE(off + 32);
+    const localOff = buf.readUInt32LE(off + 42);
+    const name = buf.toString('utf8', off + 46, off + 46 + nameLen);
+    off += 46 + nameLen + extraLen + commentLen;
+    if (!name || name.endsWith('/')) continue;
+    if (localOff + 30 > buf.length || buf.readUInt32LE(localOff) !== 0x04034b50) continue;
+    const lnLen = buf.readUInt16LE(localOff + 26);
+    const leLen = buf.readUInt16LE(localOff + 28);
+    const start = localOff + 30 + lnLen + leLen;
+    const raw = buf.subarray(start, start + compSize);
+    let data = null;
+    try {
+      if (method === 0) data = Buffer.from(raw);
+      else if (method === 8) data = inflateRawSync(raw);
+    } catch (error) {
+      data = null;
+    }
+    if (data) out.push({ name, data });
+  }
+  return out;
+}
+
+function clawhubItem(raw) {
+  const st = raw.stats || {};
+  const owner = raw.ownerHandle || (raw.owner && raw.owner.handle) || '';
+  return {
+    key: 'clawhub:' + owner + '/' + raw.slug,
+    owner: owner,
+    slug: raw.slug || '',
+    name: raw.displayName || raw.slug || '',
+    description: raw.summary || raw.description || '',
+    topics: Array.isArray(raw.topics) ? raw.topics : [],
+    version: (raw.latestVersion && raw.latestVersion.version) || (raw.tags && raw.tags.latest) || '',
+    downloads: Number(st.downloads || raw.downloads || 0),
+    installs: Number(st.installs || 0),
+    stars: Number(st.stars || 0),
+    updatedAt: raw.updatedAt || (raw.metrics && raw.metrics.updatedAt) || 0,
+    url: 'https://clawhub.ai/' + owner + '/' + raw.slug,
+  };
+}
+
 // ===== 翻译：把英文简介译成用户常用语言 =====
 // 只依赖 MyMemory 免费接口（国内可达，translate.googleapis.com 在本机超时）。
 // 结果按 “目标语言 + 原文” 的 sha1 缓存到磁盘，命中后零网络。
@@ -1526,6 +1626,171 @@ export function apply(ctx) {
         return;
       }
 
+      if (url === '/skillbox/clawhub/list') {
+        if (req.method !== 'GET') {
+          sendJson(res, 405, { ok: false, error: 'method not allowed' });
+          return;
+        }
+        const params = new URL(req.url, 'http://127.0.0.1').searchParams;
+        const sort = String(params.get('sort') || 'downloads');
+        if (!/^(downloads|installs|stars|updated|new)$/.test(sort)) {
+          sendJson(res, 400, { ok: false, error: 'bad sort' });
+          return;
+        }
+        const limit = Math.max(1, Math.min(50, Number(params.get('limit') || 24) || 24));
+        const cursor = String(params.get('cursor') || '').trim();
+        let qs = '?sort=' + encodeURIComponent(sort) + '&limit=' + limit;
+        if (cursor) qs += '&cursor=' + encodeURIComponent(cursor);
+        const found = await clawhubJson('/skills' + qs);
+        if (!found.json) {
+          sendJson(res, 502, { ok: false, error: 'clawhub unreachable' });
+          return;
+        }
+        sendJson(res, 200, {
+          ok: true,
+          items: (found.json.items || []).map(clawhubItem).filter(function (x) { return x.owner && x.slug; }),
+          nextCursor: found.json.nextCursor || '',
+        });
+        return;
+      }
+
+      if (url === '/skillbox/clawhub/search') {
+        if (req.method !== 'GET') {
+          sendJson(res, 405, { ok: false, error: 'method not allowed' });
+          return;
+        }
+        const params = new URL(req.url, 'http://127.0.0.1').searchParams;
+        const q = String(params.get('q') || '').trim().slice(0, 120);
+        if (!q) {
+          sendJson(res, 400, { ok: false, error: 'empty query' });
+          return;
+        }
+        const limit = Math.max(1, Math.min(50, Number(params.get('limit') || 24) || 24));
+        const found = await clawhubJson('/search?q=' + encodeURIComponent(q) + '&limit=' + limit);
+        if (!found.json) {
+          sendJson(res, 502, { ok: false, error: 'clawhub unreachable' });
+          return;
+        }
+        const items = (found.json.results || [])
+          .map(function (raw) {
+            const ref = (raw.install && raw.install.reference) || '';
+            const bits = ref.split('/');
+            const owner = bits[0] || (raw.native && raw.native.ownerHandle) || '';
+            const slug = bits[1] || (raw.native && raw.native.skill && raw.native.skill.slug) || '';
+            const st = (raw.native && raw.native.skill && raw.native.skill.stats) || {};
+            return {
+              key: 'clawhub:' + owner + '/' + slug,
+              owner: owner,
+              slug: slug,
+              name: raw.displayName || slug,
+              description: raw.summary || (raw.native && raw.native.skill && raw.native.skill.summary) || '',
+              topics: [],
+              version: (raw.native && raw.native.skill && raw.native.skill.tags && raw.native.skill.tags.latest) || '',
+              downloads: Number(raw.downloads || st.downloads || 0),
+              installs: Number(st.installs || 0),
+              stars: Number(st.stars || 0),
+              updatedAt: (raw.metrics && raw.metrics.updatedAt) || 0,
+              url: 'https://clawhub.ai/' + owner + '/' + slug,
+            };
+          })
+          .filter(function (x) { return x.owner && x.slug; });
+        sendJson(res, 200, { ok: true, items: items });
+        return;
+      }
+
+      if (url === '/skillbox/clawhub/file') {
+        if (req.method !== 'GET') {
+          sendJson(res, 405, { ok: false, error: 'method not allowed' });
+          return;
+        }
+        const params = new URL(req.url, 'http://127.0.0.1').searchParams;
+        const owner = String(params.get('owner') || '').trim();
+        const slug = String(params.get('slug') || '').trim();
+        const file = String(params.get('path') || 'SKILL.md').trim();
+        if (!/^[\w.-]{1,80}$/.test(owner) || !/^[\w.-]{1,80}$/.test(slug) || file.includes('..')) {
+          sendJson(res, 400, { ok: false, error: 'bad args' });
+          return;
+        }
+        const buf = await clawhubBuffer(
+          '/skills/' + encodeURIComponent(slug) + '/file?path=' + encodeURIComponent(file) + '&owner=' + encodeURIComponent(owner),
+          400000,
+        );
+        if (!buf) {
+          sendJson(res, 404, { ok: false, error: 'cannot read file' });
+          return;
+        }
+        sendJson(res, 200, { ok: true, path: file, text: buf.toString('utf8').slice(0, 200000) });
+        return;
+      }
+
+      if (url === '/skillbox/clawhub/install') {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, error: 'method not allowed' });
+          return;
+        }
+        const raw = await readBody(req);
+        let payload = {};
+        try {
+          payload = JSON.parse(raw || '{}');
+        } catch (error) {
+          sendJson(res, 400, { ok: false, error: 'bad json' });
+          return;
+        }
+        const owner = String(payload.owner || '').trim();
+        const slug = String(payload.slug || '').trim();
+        if (!/^[\w.-]{1,80}$/.test(owner) || !/^[\w.-]{1,80}$/.test(slug)) {
+          sendJson(res, 400, { ok: false, error: 'bad args' });
+          return;
+        }
+        const zip = await clawhubBuffer(
+          '/download?slug=' + encodeURIComponent(slug) + '&owner=' + encodeURIComponent(owner),
+          12 * 1024 * 1024,
+        );
+        if (!zip) {
+          sendJson(res, 502, { ok: false, error: 'download failed' });
+          return;
+        }
+        const entries = unzipBuffer(zip);
+        if (!entries.length) {
+          sendJson(res, 502, { ok: false, error: 'empty or unsupported zip' });
+          return;
+        }
+        let dir = safeName(slugify(slug));
+        if (!dir) dir = 'clawhub-' + slug;
+        let target = join(DSH_SKILLS, dir);
+        if (existsSync(target)) target = join(DSH_SKILLS, dir + '-' + String(Date.now()).slice(-5));
+        mkdirSync(target, { recursive: true });
+        let total = 0;
+        let written = 0;
+        for (const item of entries) {
+          const rel = item.name.split('\\').join('/').replace(/^\.?\//, '');
+          if (!rel || rel.includes('..')) continue;
+          if (total > 12 * 1024 * 1024) break;
+          const dest = join(target, rel);
+          if (!dest.startsWith(resolve(target) + sep)) continue;
+          mkdirSync(dirname(dest), { recursive: true });
+          writeFileSync(dest, item.data);
+          total += item.data.length;
+          written += 1;
+        }
+        writeFileSync(
+          join(target, '.skillbox.json'),
+          JSON.stringify(
+            {
+              origin: 'clawhub:' + owner + '/' + slug,
+              platform: 'clawhub',
+              sourceUrl: 'https://clawhub.ai/' + owner + '/' + slug,
+              importedAt: new Date().toISOString(),
+            },
+            null,
+            2,
+          ),
+          'utf8',
+        );
+        sendJson(res, 200, { ok: true, target: target, files: written, bytes: total });
+        return;
+      }
+
       if (url === '/skillbox/import') {
         if (req.method !== 'POST') {
           sendJson(res, 405, { ok: false, error: 'method not allowed' });
@@ -1800,6 +2065,10 @@ export function apply(ctx) {
       '/skillbox/discover/tree',
       '/skillbox/discover/file',
       '/skillbox/discover/install',
+      '/skillbox/clawhub/list',
+      '/skillbox/clawhub/search',
+      '/skillbox/clawhub/file',
+      '/skillbox/clawhub/install',
       '/skillbox/report',
       '/skillbox/diag',
     ];
