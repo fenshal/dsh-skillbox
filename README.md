@@ -22,7 +22,7 @@
 | **预览** | 右侧直接看文件树、SKILL.md 摘要，还能「查看全文」弹层 |
 | **导入 / 移除** | 一键复制成 DSH 常驻技能；移除只删自己导入的那份 |
 | **专家** | 读取 WorkBuddy 专家包、豆包「工作伙伴」导出包，导入成带人设的技能 |
-| **发现** | 在 GitHub 上按 `SKILL.md` 搜索，预览正文后一键安装到 `~/.dsh/skills` |
+| **发现** | GitHub（`SKILL.md` 代码搜索 / 仓库搜索）与 ClawHub 目录双来源，预览正文后一键安装到 `~/.dsh/skills` |
 | **会话专家胶囊** | 输入框下方选专家，按轮次生效；助手回复上方显示头像与名字 |
 
 界面在左侧栏「插件 / 自动化任务」同一组，是一个整页三栏布局：左分类、中卡片网格、右详情。
@@ -47,7 +47,7 @@ plugin_manager install_bundle  <克隆目录的绝对路径>
 
 ### 方式二：压缩包
 
-下载 [Releases](https://github.com/fenshal/dsh-skillbox/releases) 里的 `dsh-skillbox-0.2.0.zip`，解压后用同样方式 `install_bundle` 指向解压目录。
+下载 [Releases](https://github.com/fenshal/dsh-skillbox/releases) 里的 `dsh-skillbox-0.3.0.zip`，解压后用同样方式 `install_bundle` 指向解压目录。
 
 > 插件 ID 是 `@local/dsh-skillbox`，要求 DSH 客户端提供 `@deepseek-ai/dsh-client-ui-layout` 与 `-ui-sidebar`（DSH 0.1.x 起自带）。
 
@@ -71,9 +71,11 @@ plugin_manager install_bundle  <克隆目录的绝对路径>
 
 ### 发现页签
 
-- 分类：Claude / Codex / DSH / 通用 Agent
-- 两种模式：**技能**（GitHub 代码搜索 `filename:SKILL.md`）与 **仓库**（仓库搜索）
+- 两个来源，顶部切换：
+  - **GitHub 搜索**：分类 Claude / Codex / DSH / 通用 Agent；两种模式 **技能**（代码搜索 `filename:SKILL.md`）与 **仓库**（仓库搜索）；可按星标 / Fork / 更新时间排序
+  - **ClawHub 热门**：读 [clawhub.ai](https://clawhub.ai) 公共目录，按**真实下载量 / 安装量 / 星标 / 最近更新**排序，可搜索、可「加载更多」翻页
 - 点卡片看仓库里的技能清单，点「预览」看正文，确认后「安装到技能库」
+- ClawHub 装的是整包（zip 解到 `~/.dsh/skills/<slug>`），会保留 `assets/` `hooks/` `references/` `scripts/` 等子目录
 
 ---
 
@@ -110,7 +112,8 @@ plugin_manager install_bundle  <克隆目录的绝对路径>
 - 专家只搬「人设 + 技能文本」，**不带工具集和连接器**（DSH 目前没有对应槽位）。依赖豆包/美图云服务的专家，导入后那些云端调用跑不了
 - 豆包工作版的专家头像/介绍是服务端下发，本地没有，所以只能拿到技能文本
 - 机翻对产品名不友好（如 `impeccable → 无可挑剔`），所以标题始终保留原名
-- GitHub 没有「下载量」概念，发现页只能用 star / fork 近似热度
+- GitHub 没有「下载量」概念，所以 GitHub 来源只能用 star / fork 近似热度；要真实下载量请切到 **ClawHub 热门**
+- ClawHub 的统计由 clawhub.ai 提供，本插件只做只读聚合
 
 ---
 
@@ -136,7 +139,7 @@ locale/{zh,en}.json # 侧栏标题与描述
 icon.png            # 侧栏图标（256×256）
 ```
 
-host 侧路由一览：`/skillbox/{list,import,remove,detail,file,experts,import-expert,avatar,translate,preview,selection,select-expert,discover,discover/skills,discover/tree,discover/file,discover/install,discover/meta,gh-status,gh-token,report,autoselect}`。
+host 侧路由一览：`/skillbox/{list,import,remove,detail,file,experts,import-expert,avatar,translate,preview,selection,select-expert,discover,discover/skills,discover/tree,discover/file,discover/install,discover/meta,clawhub/list,clawhub/search,clawhub/file,clawhub/install,gh-status,gh-token,report,autoselect}`。
 
 调试小技巧：客户端会把整页几何与插入的头像条数量 POST 到 `/skillbox/report`，排查布局问题很方便。
 
@@ -144,7 +147,7 @@ host 侧路由一览：`/skillbox/{list,import,remove,detail,file,experts,import
 
 ## English
 
-**DSH Skill Library** is a DeepSeek Harness plugin that pulls skills and experts scattered across DSH, WorkBuddy, Claude Code, Codex and Doubao Work into one full-page panel: browse, preview `SKILL.md`, import into `~/.dsh/skills`, and discover/install skills straight from GitHub.
+**DSH Skill Library** is a DeepSeek Harness plugin that pulls skills and experts scattered across DSH, WorkBuddy, Claude Code, Codex and Doubao Work into one full-page panel: browse, preview `SKILL.md`, import into `~/.dsh/skills`, and discover/install skills from GitHub or the ClawHub directory.
 
 - **Read-only scan** — source folders are never modified; import copies a skill into your own DSH skills directory.
 - **Plain files only** — encrypted or binary stores are skipped.
