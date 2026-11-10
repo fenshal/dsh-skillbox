@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-skillbox",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": false,
   "description": "DSH Skill Library: a local skill and expert manager for DeepSeek Harness — lists skills from DSH / WorkBuddy / Claude / Codex / Doubao, imports and previews them, and discovers skills on GitHub or ClawHub",
   "type": "module",
