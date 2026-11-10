@@ -47,9 +47,17 @@ plugin_manager install_bundle  <克隆目录的绝对路径>
 
 ### 方式二：压缩包
 
-下载 [Releases](https://github.com/fenshal/dsh-skillbox/releases) 里的 `dsh-skillbox-0.3.0.zip`，解压后用同样方式 `install_bundle` 指向解压目录。
+下载 [Releases](https://github.com/fenshal/dsh-skillbox/releases) 里的 `dsh-skillbox-0.4.0.zip`，解压后用同样方式 `install_bundle` 指向解压目录。
 
 > 插件 ID 是 `@local/dsh-skillbox`，要求 DSH 客户端提供 `@deepseek-ai/dsh-client-ui-layout` 与 `-ui-sidebar`（DSH 0.1.x 起自带）。
+
+### 方式三：装好之后自助更新
+
+装过一次就不用再卸载重装了。页面底部显示当前版本，点「检查更新」：
+
+- 有新版本 → 出现「更新到 vX」按钮，点一下就下载 release 包、**就地覆盖**插件文件
+- 覆盖前把当前版本整目录备份成 `skillbox.bak-<旧版本>-<时间戳>`，想回退直接把备份目录改回来即可
+- 更新完**重启 DSH** 生效（客户端 bundle 在启动时构建）
 
 ---
 
