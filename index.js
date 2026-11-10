@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSyn
 import { join, relative, resolve, sep, dirname, delimiter } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { inflateRawSync } from 'node:zlib';
 
@@ -1131,6 +1132,152 @@ export const inject = ['webServer', 'systemPrompt'];
 let diagLast = null;
 const diagLog = [];
 
+
+// ===== 自更新：从 GitHub Release 覆盖当前插件目录 =====
+const UPDATE_REPO = 'fenshal/dsh-skillbox';
+const HERE = dirname(fileURLToPath(import.meta.url));
+
+function localPkg() {
+  try {
+    return JSON.parse(readFileSync(join(HERE, 'package.json'), 'utf8'));
+  } catch (error) {
+    return {};
+  }
+}
+
+function parseVer(text) {
+  return String(text || '')
+    .replace(/^v/i, '')
+    .split(/[.+-]/)
+    .slice(0, 3)
+    .map(function (x) {
+      const n = parseInt(x, 10);
+      return Number.isFinite(n) ? n : 0;
+    });
+}
+
+function cmpVer(a, b) {
+  const x = parseVer(a);
+  const y = parseVer(b);
+  for (let i = 0; i < 3; i++) {
+    const d = (x[i] || 0) - (y[i] || 0);
+    if (d !== 0) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+async function latestRelease() {
+  const found = await ghJson('/repos/' + UPDATE_REPO + '/releases/latest');
+  if (!found || found.status !== 200 || !found.json) {
+    return { ok: false, error: found && found.error ? found.error : 'release lookup failed (status ' + (found && found.status) + ')' };
+  }
+  const rel = found.json;
+  const assets = Array.isArray(rel.assets) ? rel.assets : [];
+  const asset = assets.find(function (a) {
+    return /\.zip$/i.test(String(a.name || ''));
+  });
+  return {
+    ok: true,
+    tag: rel.tag_name || '',
+    version: String(rel.tag_name || '').replace(/^v/i, ''),
+    name: rel.name || '',
+    url: rel.html_url || '',
+    publishedAt: rel.published_at || '',
+    notes: String(rel.body || '').slice(0, 4000),
+    asset: asset ? { name: asset.name, size: asset.size, id: asset.id } : null,
+  };
+}
+
+async function downloadAsset(assetId) {
+  const headers = { 'user-agent': 'dsh-skillbox', accept: 'application/octet-stream' };
+  const token = ghToken();
+  if (token) headers.authorization = 'Bearer ' + token;
+  const controller = new AbortController();
+  const timer = setTimeout(function () { controller.abort(); }, 60000);
+  try {
+    const resp = await fetch('https://api.github.com/repos/' + UPDATE_REPO + '/releases/assets/' + assetId, {
+      headers,
+      signal: controller.signal,
+      redirect: 'follow',
+    });
+    if (resp.status !== 200) return { ok: false, error: 'download failed (status ' + resp.status + ')' };
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (buf.length > 40 * 1024 * 1024) return { ok: false, error: 'asset too large' };
+    return { ok: true, buf };
+  } catch (error) {
+    return { ok: false, error: String((error && error.message) || error) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function copyDirDeep(from, to) {
+  mkdirSync(to, { recursive: true });
+  for (const name of readdirSync(from)) {
+    const src = join(from, name);
+    const dst = join(to, name);
+    const st = statSync(src);
+    if (st.isDirectory()) {
+      if (name === 'node_modules' || name === '.git') continue;
+      copyDirDeep(src, dst);
+    } else {
+      copyFileSync(src, dst);
+    }
+  }
+}
+
+async function applyUpdate() {
+  const before = localPkg();
+  const from = String(before.version || '0.0.0');
+  const rel = await latestRelease();
+  if (!rel.ok) return { ok: false, error: rel.error };
+  if (!rel.asset) return { ok: false, error: 'release has no zip asset' };
+  if (cmpVer(rel.version, from) <= 0) {
+    return { ok: false, error: 'already up to date (' + from + ')' };
+  }
+  const got = await downloadAsset(rel.asset.id);
+  if (!got.ok) return { ok: false, error: got.error };
+
+  const entries = unzipBuffer(got.buf);
+  if (!entries.length) return { ok: false, error: 'zip has no readable entries' };
+  const pkgEntry = entries.find(function (e) {
+    return /(^|\/)package\.json$/.test(e.name);
+  });
+  if (!pkgEntry) return { ok: false, error: 'zip has no package.json' };
+  let nextPkg = null;
+  try {
+    nextPkg = JSON.parse(pkgEntry.data.toString('utf8'));
+  } catch (error) {
+    return { ok: false, error: 'zip package.json is invalid' };
+  }
+  if (String(nextPkg.name || '') !== '@local/dsh-skillbox') {
+    return { ok: false, error: 'package name mismatch: ' + nextPkg.name };
+  }
+  if (cmpVer(nextPkg.version, rel.version) !== 0) {
+    return { ok: false, error: 'version mismatch: zip ' + nextPkg.version + ' vs release ' + rel.version };
+  }
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backup = HERE + '.bak-' + from + '-' + stamp;
+  try {
+    copyDirDeep(HERE, backup);
+  } catch (error) {
+    return { ok: false, error: 'backup failed: ' + String((error && error.message) || error) };
+  }
+
+  let written = 0;
+  for (const entry of entries) {
+    const relPath = String(entry.name || '').replace(/\\/g, '/');
+    if (!relPath || relPath.startsWith('/') || relPath.includes('..')) continue;
+    const target = join(HERE, relPath);
+    if (!resolve(target).startsWith(resolve(HERE) + sep)) continue;
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, entry.data);
+    written += 1;
+  }
+  return { ok: true, from, to: nextPkg.version, backup, files: written, url: rel.url };
+}
+
 export function apply(ctx) {
   const handler = async function (req, res) {
     const url = String(req.url || '').split('?')[0];
@@ -1189,7 +1336,7 @@ export function apply(ctx) {
           return;
         }
         const entries = scan();
-        sendJson(res, 200, { ok: true, skillsDir: DSH_SKILLS, entries });
+        sendJson(res, 200, { ok: true, skillsDir: DSH_SKILLS, version: String(localPkg().version || ''), entries });
         return;
       }
 
@@ -1623,6 +1770,40 @@ export function apply(ctx) {
           'utf8',
         );
         sendJson(res, 200, { ok: true, target: target, files: saved.length, bytes: total });
+        return;
+      }
+
+
+      if (url === '/skillbox/update/check') {
+        const before = localPkg();
+        const cur = String(before.version || '0.0.0');
+        const rel = await latestRelease();
+        if (!rel.ok) {
+          sendJson(res, 502, { ok: false, current: cur, error: rel.error });
+          return;
+        }
+        sendJson(res, 200, {
+          ok: true,
+          current: cur,
+          latest: rel.version,
+          hasUpdate: cmpVer(rel.version, cur) > 0,
+          name: rel.name,
+          url: rel.url,
+          publishedAt: rel.publishedAt,
+          notes: rel.notes,
+          asset: rel.asset ? { name: rel.asset.name, size: rel.asset.size } : null,
+          dir: HERE,
+        });
+        return;
+      }
+
+      if (url === '/skillbox/update/apply') {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, error: 'method not allowed' });
+          return;
+        }
+        const result = await applyUpdate();
+        sendJson(res, result.ok ? 200 : 400, result);
         return;
       }
 
@@ -2069,6 +2250,8 @@ export function apply(ctx) {
       '/skillbox/clawhub/search',
       '/skillbox/clawhub/file',
       '/skillbox/clawhub/install',
+      '/skillbox/update/check',
+      '/skillbox/update/apply',
       '/skillbox/report',
       '/skillbox/diag',
     ];
