@@ -182,6 +182,11 @@ window.__ModuleLoader__.load({
       '.sh-more{grid-column:1/-1;display:flex;justify-content:center;padding:10px 0 4px}',
       '.sh-foot{display:flex;gap:10px;align-items:center;padding:8px 20px;border-top:1px solid var(--sh-line);font-size:11px;opacity:.45}',
       '.sh-foot-r{margin-left:auto}',
+      '.sh-upd{display:flex;align-items:center;gap:8px;margin-left:14px;padding-left:14px;border-left:1px solid var(--sh-line)}',
+      '.sh-ver{font-family:ui-monospace,Consolas,monospace;opacity:.75}',
+      '.sh-upd-ok{color:#5fd08a;opacity:.9}',
+      '.sh-upd-msg{opacity:.7;max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.sh-upd-link{color:#7cb7ff;text-decoration:none}',
       '.sh-sort{height:30px;padding:0 8px;border-radius:8px;border:1px solid var(--sh-line);background:transparent;color:inherit;font-size:12.5px;cursor:pointer}',
   '.sh-badge.rec{background:rgba(64,158,255,.18);color:#7cb7ff;border-color:rgba(64,158,255,.35)}',
   '.sh-modal-mask{position:fixed;inset:0;background:rgba(8,10,14,.62);display:flex;align-items:center;justify-content:center;z-index:9500;padding:40px}',
@@ -233,6 +238,48 @@ window.__ModuleLoader__.load({
           return { ok: false, error: 'bad response' };
         });
       });
+    }
+
+    function checkUpdate(setState) {
+      const setBusy = setState.busy;
+      const setMsg = setState.msg;
+      const setUpd = setState.upd;
+      setBusy(true);
+      setMsg('');
+      return api('/skillbox/update/check')
+        .then(function (r) {
+          setUpd(r || null);
+          if (r && r.ok === false) setMsg(r.error || '检查失败');
+        })
+        .catch(function (e) {
+          setMsg(String((e && e.message) || e));
+        })
+        .then(function () {
+          setBusy(false);
+        });
+    }
+
+    function applyUpdate(setState) {
+      const setBusy = setState.busy;
+      const setMsg = setState.msg;
+      const setUpd = setState.upd;
+      setBusy(true);
+      setMsg('正在下载并覆盖文件…');
+      return api('/skillbox/update/apply', {})
+        .then(function (r) {
+          if (r && r.ok) {
+            setMsg('已更新到 v' + r.to + '（覆盖 ' + r.files + ' 个文件，旧版本备份在 ' + r.backup + '）。重启 DSH 后生效。');
+            setUpd({ ok: true, current: r.to, latest: r.to, hasUpdate: false });
+          } else {
+            setMsg((r && r.error) || '更新失败');
+          }
+        })
+        .catch(function (e) {
+          setMsg(String((e && e.message) || e));
+        })
+        .then(function () {
+          setBusy(false);
+        });
     }
 
     function ExpertChip(props) {
@@ -436,6 +483,7 @@ window.__ModuleLoader__.load({
       const [skills, setSkills] = React.useState([]);
       const [experts, setExperts] = React.useState([]);
       const [skillsDir, setSkillsDir] = React.useState('');
+      const [version, setVersion] = React.useState('');
       const [loading, setLoading] = React.useState(true);
       const [error, setError] = React.useState('');
       const [busy, setBusy] = React.useState('');
@@ -474,6 +522,9 @@ window.__ModuleLoader__.load({
       const [clawErr, setClawErr] = React.useState('');
       const [clawCursor, setClawCursor] = React.useState('');
       const [clawSort, setClawSort] = React.useState('downloads');
+      const [upd, setUpd] = React.useState(null);
+      const [updBusy, setUpdBusy] = React.useState(false);
+      const [updMsg, setUpdMsg] = React.useState('');
       const D_CATS = [
         { id: 'claude', label: 'Claude', q: 'topic:claude-skills' },
         { id: 'codex', label: 'Codex', q: 'topic:codex' },
@@ -498,6 +549,7 @@ window.__ModuleLoader__.load({
             if (!a.ok) throw new Error(a.error || '读取技能失败');
             setSkills(a.entries || []);
             setSkillsDir(a.skillsDir || '');
+            setVersion(a.version || '');
             setExperts(b.ok ? b.experts || [] : []);
           })
           .catch(function (err) {
@@ -1707,6 +1759,47 @@ window.__ModuleLoader__.load({
           'div',
           { className: 'sh-foot' },
           h('span', null, '导入目录：' + (skillsDir || '~/.dsh/skills')),
+          h(
+            'span',
+            { className: 'sh-upd' },
+            h('span', { className: 'sh-ver' }, 'v' + ((upd && upd.current) || version || '0.0.0')),
+            h(
+              'button',
+              {
+                className: 'sh-btn',
+                disabled: updBusy,
+                onClick: function () {
+                  checkUpdate({ busy: setUpdBusy, msg: setUpdMsg, upd: setUpd });
+                },
+              },
+              updBusy ? '检查中…' : '检查更新',
+            ),
+            upd && upd.hasUpdate
+              ? h(
+                  'button',
+                  {
+                    className: 'sh-btn primary',
+                    disabled: updBusy,
+                    title: upd.notes ? String(upd.notes).slice(0, 300) : '',
+                    onClick: function () {
+                      applyUpdate({ busy: setUpdBusy, msg: setUpdMsg, upd: setUpd });
+                    },
+                  },
+                  '更新到 v' + upd.latest,
+                )
+              : null,
+            upd && upd.ok && !upd.hasUpdate
+              ? h('span', { className: 'sh-upd-ok' }, '已是最新')
+              : null,
+            upd && upd.url
+              ? h(
+                  'a',
+                  { className: 'sh-upd-link', href: upd.url, target: '_blank', rel: 'noreferrer' },
+                  '更新说明',
+                )
+              : null,
+          ),
+          updMsg ? h('span', { className: 'sh-upd-msg' }, updMsg) : null,
           h('span', { className: 'sh-foot-r' }, '只读取本机明文文件，不修改来源'),
         ),
         prev
